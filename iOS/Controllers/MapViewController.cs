@@ -125,6 +125,19 @@ namespace IndoorRouting.iOS
             {
                 this.MapView.LocationDisplay.IsEnabled = false;
             }
+
+            // If the routing is disabled, hide the directions button
+            if (AppSettings.CurrentSettings.IsRoutingEnabled == false)
+            {
+                this.DirectionsButton.Enabled = false;
+                this.DirectionsButton.TintColor = UIColor.White;
+
+			}
+            else
+            {
+				this.DirectionsButton.Enabled = true;
+                this.DirectionsButton.TintColor = UIColor.Blue;
+            }
         }
 
         // TODO: implement max size for floor picker 
@@ -169,6 +182,7 @@ namespace IndoorRouting.iOS
                 });
             }
 
+            // Set borders and shadows on controls
             this.CurrentLocationButton.Layer.ShadowColor = UIColor.Gray.CGColor;
             this.CurrentLocationButton.Layer.ShadowOpacity = 1.0f;
             this.CurrentLocationButton.Layer.ShadowRadius = 6.0f;
@@ -193,6 +207,10 @@ namespace IndoorRouting.iOS
             this.SearchToolbar.Layer.ShadowOffset = new System.Drawing.SizeF(0f, 3f);
             this.SearchToolbar.Layer.MasksToBounds = false;
 
+            // Remove mapview grid and set its background
+            this.MapView.BackgroundGrid.GridLineWidth = 0;
+            this.MapView.BackgroundGrid.Color = System.Drawing.Color.WhiteSmoke;
+
             // Add a graphics overlay to hold the pins and route graphics
             var pinsGraphicOverlay = new GraphicsOverlay();
             pinsGraphicOverlay.Id = "PinsGraphicsOverlay";
@@ -206,7 +224,6 @@ namespace IndoorRouting.iOS
             routeGraphicsOverlay.Id = "RouteGraphicsOverlay";
             this.MapView.GraphicsOverlays.Add(routeGraphicsOverlay);
 
-            // TODO: The comments below were added on January 24. Check to see if the last letter disappears. 
             // Handle the user moving the map 
             this.MapView.NavigationCompleted += this.MapView_NavigationCompleted;
 
@@ -216,7 +233,7 @@ namespace IndoorRouting.iOS
             // Handle the user double tapping on the map
             this.MapView.GeoViewDoubleTapped += this.MapView_GeoViewDoubleTapped;
 
-            // Handle the user holding tap on the mapp
+            // Handle the user holding tap on the map
             this.MapView.GeoViewHolding += this.MapView_GeoViewHolding;
 
             this.MapView.LocationDisplay.LocationChanged += this.MapView_LocationChanged;
@@ -482,16 +499,6 @@ namespace IndoorRouting.iOS
                 this.FloorsTableView.Hidden = true;
                 this.ViewModel.SetFloorVisibility(false);
             }
-
-            if (this.MapView.MapScale <= 300)
-            {
-                // Workaround to show labels until core bug is fixed
-                await this.DisplayLabelsAsync();
-            }
-            else
-            {
-                this.MapView.GraphicsOverlays["LabelsGraphicsOverlay"].Graphics.Clear();
-            }
         }
 
         /// <summary>
@@ -567,8 +574,10 @@ namespace IndoorRouting.iOS
                         var roomMarker = new PictureMarkerSymbol(new RuntimeImage(mapPin));
                         roomMarker.OffsetY = uiImagePin.Size.Height * 0.65;
 
+                        var identifiedResult = idResults.GeoElements.First();
+
                         // Create graphic
-                        var mapPinGraphic = new Graphic(GeometryEngine.LabelPoint(idResults.GeoElements.First().Geometry as Polygon), roomMarker);
+                        var mapPinGraphic = new Graphic(identifiedResult.Geometry.Extent.GetCenter(), roomMarker);
 
                         // Add pin to mapview
                         var graphicsOverlay = this.MapView.GraphicsOverlays["PinsGraphicsOverlay"];
@@ -577,13 +586,19 @@ namespace IndoorRouting.iOS
 
                         // Get room attribute from the settings. First attribute should be set as the searcheable one
                         var roomAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[0];
-                        var employeeNameAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[1];
-                        var roomNumber = idResults.GeoElements.First().Attributes[roomAttribute];
-                        var employeeName = idResults.GeoElements.First().Attributes[employeeNameAttribute];
+                        var roomNumber = identifiedResult.Attributes[roomAttribute];
 
                         if (roomNumber != null)
                         {
-                            var employeeNameLabel = employeeName ?? string.Empty;
+                            var employeeNameLabel = string.Empty;
+                            if (AppSettings.CurrentSettings.ContactCardDisplayFields.Count > 1)
+                            {
+
+                                var employeeNameAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[1];
+                                var employeeName = identifiedResult.Attributes[employeeNameAttribute];
+                                employeeNameLabel = employeeName as string ?? string.Empty;
+                            }
+                            
                             this.ShowBottomCard(roomNumber.ToString(), employeeNameLabel.ToString(), false);
                         }
                         else
@@ -713,49 +728,6 @@ namespace IndoorRouting.iOS
         }
 
         /// <summary>
-        /// Gets the labels for the current extent in a graphics overlay
-        /// This is a temporary workaround until the labeling bug in core gets fixed
-        /// </summary>
-        /// <returns>The labels in a graphics overlay</returns>
-        private async Task DisplayLabelsAsync()
-        {
-            var labelsViewModel = new LabelsViewModel();
-            var labelFeatures = await labelsViewModel.GetLabelsInVisibleAreaAsync(this.MapView, this.ViewModel.SelectedFloorLevel);
-
-            if (labelFeatures != null)
-            {
-                try
-                {
-                    var graphicsOverlay = this.MapView.GraphicsOverlays["LabelsGraphicsOverlay"];
-                    graphicsOverlay.Graphics.Clear();
-
-                    // Run garbage collector manually to prevent System.ArgumentException bug
-                    // TODO: Remove the manual garbage collection when bug is fixed
-                    GC.Collect();
-                    GC.WaitForPendingFinalizers();
-
-                    foreach (var feature in labelFeatures)
-                    {
-                        var centerPoint = feature.Geometry.Extent.GetCenter();
-                        var label = feature.Attributes["LONGNAME"];
-
-                        if (label != null)
-                        {
-                            // Create graphic
-                            var labelText = new TextSymbol(label.ToString(), System.Drawing.Color.Black, 10, HorizontalAlignment.Center, VerticalAlignment.Middle);
-                            var labelGraphic = new Graphic(centerPoint, labelText);
-
-                            // Add label to map
-                            graphicsOverlay.Graphics.Add(labelGraphic);
-                        }
-                    }
-                }
-                catch 
-                {
-                }
-            }
-        }
-        /// <summary>
         /// Gets the index of the table view row.
         /// </summary>
         /// <returns>The table view row index.</returns>
@@ -846,12 +818,16 @@ namespace IndoorRouting.iOS
                 {
                     // Get room attribute from the settings. First attribute should be set as the searcheable one
                     var roomAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[0];
-                    var employeeNameAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[1];
                     var roomNumber = roomFeature.Attributes[roomAttribute];
-                    var employeeName = roomFeature.Attributes[employeeNameAttribute];
-
                     var roomNumberLabel = roomNumber ?? string.Empty;
-                    var employeeNameLabel = employeeName ?? string.Empty;
+
+                    var employeeNameLabel = string.Empty;
+                    if (AppSettings.CurrentSettings.ContactCardDisplayFields.Count > 1)
+                    {
+                        var employeeNameAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[1];
+                        var employeeName = roomFeature.Attributes[employeeNameAttribute];
+                        employeeNameLabel = employeeName as string ?? string.Empty;
+                    }
 
                     this.ShowBottomCard(roomNumberLabel.ToString(), employeeNameLabel.ToString(), false);
                 }
@@ -890,20 +866,10 @@ namespace IndoorRouting.iOS
         /// </summary>
         /// <param name="sender">Sender element.</param>
         /// <param name="e">Event args.</param>
-        private async void FloorsTableSource_TableRowSelected(object sender, TableRowSelectedEventArgs<string> e)
+        private void FloorsTableSource_TableRowSelected(object sender, TableRowSelectedEventArgs<string> e)
         {
             this.ViewModel.SelectedFloorLevel = e.SelectedItem;
             this.ViewModel.SetFloorVisibility(true); 
-
-            if (this.MapView.MapScale <= 300)
-            {
-                // Workaround to show labels until core bug is fixed
-                await this.DisplayLabelsAsync();
-            }
-            else
-            {
-                this.MapView.GraphicsOverlays["LabelsGraphicsOverlay"].Graphics.Clear();
-            }
         }
 
         /// <summary>
@@ -912,7 +878,7 @@ namespace IndoorRouting.iOS
         /// <param name="sender">Home button</param>
         async partial void Home_TouchUpInside(UIBarButtonItem sender)
         {
-            var homeLocation = await this.ViewModel.MoveToHomeLocationAsync().ConfigureAwait(false);
+            var homeLocation = this.ViewModel.MoveToHomeLocation();
 
             if (homeLocation != null)
             {
@@ -940,13 +906,16 @@ namespace IndoorRouting.iOS
             {
                 // Get room attribute from the settings. First attribute should be set as the searcheable one
                 var roomAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[0];
-                var employeeNameAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[1];
                 var roomNumber = roomFeature.Attributes[roomAttribute];
-                var employeeName = roomFeature.Attributes[employeeNameAttribute];
-
                 var roomNumberLabel = roomNumber ?? string.Empty;
-                var employeeNameLabel = employeeName ?? string.Empty;
 
+                var employeeNameLabel = string.Empty;
+                if (AppSettings.CurrentSettings.ContactCardDisplayFields.Count > 1)
+                {
+                    var employeeNameAttribute = AppSettings.CurrentSettings.ContactCardDisplayFields[1];
+                    var employeeName = roomFeature.Attributes[employeeNameAttribute];
+                    employeeNameLabel = employeeName as string ?? string.Empty;
+                }
                 this.ShowBottomCard(roomNumberLabel.ToString(), employeeNameLabel.ToString(), false);
             }
         }
